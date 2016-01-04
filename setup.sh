@@ -279,12 +279,111 @@ virtualbox_efi_setting()
 auth_system_setting()
 {
     msg "##### auth system setting"
+
+    if [ -f "/etc/arch-release" ]
+    then
+        pacman -Sy sssd smbclient ldb --noconfirm
+
+    elif [ -f "/etc/debian_version" ]
+    then
+        DEBIAN_FRONTEND=noninteractive
+        apt-get update
+        apt-get install -y vim sssd smbclient --noninteractive
+    fi
+
+cat <<EOF > /etc/sssd/sssd.conf
+[sssd]
+config_file_version = 2
+domains  = local.ym
+services = nss, pam, pac
+
+[domain/local.ym]
+id_provider                 = ad
+auth_provider               = ad
+chpass_provider             = ad
+access_provider             = ad
+ad_server                   = ad.local.ym
+ad_hostname                 = ad.local.ym
+
+cache_credentials           = true
+
+ldap_schema                 = ad
+ldap_id_mapping             = True
+ldap_access_order           = expire
+ldap_account_expire_policy  = ad
+ldap_force_upper_case_realm = true
+EOF
+
+    chmod 600 /etc/sssd/sssd.conf
+
+    echo -e "domain local.ym\nnameserver 172.17.0.3" > /etc/resolv.conf
+
+cat <<EOF > /etc/krb5.conf
+[libdefaults]
+        default_realm    = LOCAL.YM
+        dns_lookup_realm = false
+        dns_lookup_kdc   = true
+
+[realms]
+        LOCAL.YM = {
+                kdc            = ad.local.ym
+                admin_server   = ad.local.ym
+                default_domain = local.ym
+        }
+
+[domain_realm]
+        .local.ym = LOCAL.YM
+        local.ym  = LOCAL.YM
+EOF
+
+cat <<EOF > /etc/samba/smb.conf
+[global]
+    workgroup = LOCAL
+    realm = LOCAL.YM
+    security = ads
+    obey pam restrictions = Yes
+
+    algorithmic rid base = 10000
+    template homedir = /home/%U
+    template shell = /bin/bash
+
+    kerberos method = secrets and keytab
+
+    client signing = yes
+    client use spnego = yes
+
+    password server = AD.LOCAL.YM
+
+#    idmap uid = 10000-19999
+#    idmap gid = 10000-19999
+#    idmap backend = rid
+EOF
+
+    mkdir -p /var/lib/samba/private/
+
+    net ads join -U Administrator
+
+    nssfile='/etc/nsswitch.conf'
+    sed -i -re 's/(^passwd:|^group:|^shadow:).*/\1 files sss/' -e '/^sudoers/d' ${nssfile}
+    sed -i -e '$asudoers: files sss' ${nssfile}
+
+    # setup pem
+    pemfile='/etc/pam.d/system-auth'
+    sed -i -e '/pam_sss.so/d' ${pemfile}
+    sed -i -e "$(sed -ne '/^auth/{=;q}' ${pemfile})iauth    sufficient     pam_sss.so" ${pemfile}
+    sed -i -e "$(sed -ne '/^account/{=;q}' ${pemfile})iaccount [default=bad success=ok user_unknown=ignore authinfo_unavail=ignore] pam_sss.so" ${pemfile}
+    sed -i -e "$(sed -ne '/^password/{=;q}' ${pemfile})ipassword    sufficient     pam_sss.so use_authtok" ${pemfile}
+    sed -i -e "$(sed -ne '/^session  *optional/{=;q}' ${pemfile})isession    optional     pam_sss.so" ${pemfile}
+
+    systemctl start sssd
+    systemctl enable sssd
+    
 }
 
-virtualbox_efi_setting
-local_setting
-iptables_setting
-network_setting
-install_apps
-vpn_setting
-#auth_system_setting
+#virtualbox_efi_setting
+#local_setting
+#iptables_setting
+#network_setting
+#install_apps
+#vpn_setting
+auth_system_setting
