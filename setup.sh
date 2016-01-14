@@ -312,6 +312,9 @@ ldap_id_mapping             = True
 ldap_access_order           = expire
 ldap_account_expire_policy  = ad
 ldap_force_upper_case_realm = true
+
+default_shell               = /bin/bash
+fallback_homedir            = /home/%u
 EOF
 
     chmod 600 /etc/sssd/sssd.conf
